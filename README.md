@@ -10,9 +10,13 @@ Version **2.1.3-monitor.1** restores the refresh rate saved by the matching
 monitor and resolution. Game FPS targets remain independent; automatic Display Sync
 takes precedence. sys-dock's link-training behavior is unchanged.
 
+**Hardware tested (2026-10-27):** the operator tested the installed
+**SaltyNX 2.1.3-monitor.1 / FPSLocker 3.5.0-monitor.1** pair and reported that it
+works great on the Erista Switch 1 / Smash 13.0.5 setup using a 120-Hz display and
+60-FPS game target. Each EDID-identified monitor keeps its own saved preferences.
+
 See [display preferences](docs/DISPLAY-PREFERENCES.md) for configuration, installation,
-build instructions and the hardware acceptance checklist. This is a test release;
-host checks and successful compilation do not establish console reconnect behavior.
+build instructions, the dated test result and further coverage scenarios.
 
 The upstream documentation below is retained for reference. For this fork's update,
 preserve your existing `SaltySD` settings, exclusions and plugins; do not delete them.
