@@ -404,6 +404,7 @@ static Result serviceSetDisplayRefreshRate() {
     u64 refreshRate_temp = resp -> refreshRate;
 
     if (SetDisplayRefreshRate(refreshRate_temp)) {
+        MarkDockedRefreshManuallySelected();
         refreshRate = refreshRate_temp;
         ret = 0;
     }

@@ -1,5 +1,7 @@
 bool SetDisplayRefreshRate(uint32_t new_refreshRate);
 bool GetDisplayRefreshRate(uint32_t* out_refreshRate, bool internal);
+void UpdateDockedDisplayPreference(uint32_t* current);
+void MarkDockedRefreshManuallySelected();
 uint8_t getDockedHighestRefreshRateAllowed();
 void correctOledGamma(uint32_t refresh_rate);
 void setAllowedDockedRefreshRatesIPC(uint32_t refreshRates, bool is720p);

@@ -1,5 +1,22 @@
 # SaltyNX
 
+## Monitor-preference fork
+
+This branch is based on the latest [masagrator/SaltyNX upstream commit](https://github.com/masagrator/SaltyNX/commit/cf2adb7b8facdc34e3cbf9ec6ff7686f67575048)
+(`cf2adb7b8facdc34e3cbf9ec6ff7686f67575048`, 2026-10-23): release **2.1.3** plus
+the subsequent NVN stack-usage fix. Upstream history and attribution are retained.
+Version **2.1.3-monitor.1** restores the refresh rate saved by the matching
+[FPSLocker fork](https://git.syntaxbyexample.com/intpa/FPSLocker) for the connected
+monitor and resolution. Game FPS targets remain independent; automatic Display Sync
+takes precedence. sys-dock's link-training behavior is unchanged.
+
+See [display preferences](docs/DISPLAY-PREFERENCES.md) for configuration, installation,
+build instructions and the hardware acceptance checklist. This is a test release;
+host checks and successful compilation do not establish console reconnect behavior.
+
+The upstream documentation below is retained for reference. For this fork's update,
+preserve your existing `SaltySD` settings, exclusions and plugins; do not delete them.
+
 Sysmodule for injecting custom codes into retail Nintendo Switch games, by default it injects "Core" which includes many useful features known as NX-FPS (tracking game performance statistics, unlocking FPS) and ReverseNX-RT (switching between docked and handheld graphics profiles). Sysmodule also manages custom refresh rates in both handheld and docked modes.
 
 This sysmodule targets more common approach, so basic compatibility with all games is a priority. If you want to inject your own code for specific game I recommend much more powerful code injection framework - [exlaunch](https://github.com/shadowninja108/exlaunch).

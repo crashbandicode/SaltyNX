@@ -268,7 +268,7 @@ void cleanAppData() {
 void updateRefreshRateForApp() {
     if ((!isDocked && displaySync) || (isDocked && displaySyncDocked)) {
         uint32_t temp_refreshRate = 0;
-        GetDisplayRefreshRate(&temp_refreshRate, true);
+        if (!GetDisplayRefreshRate(&temp_refreshRate, true)) return;
         uint32_t check_refresh_rate = refreshRate;
         if (nx_fps && (isDocked ? nx_fps->FPSlockedDocked : nx_fps->FPSlocked)) check_refresh_rate = (isDocked ? nx_fps->FPSlockedDocked : nx_fps->FPSlocked);
         if (check_refresh_rate == 0)
@@ -300,25 +300,24 @@ void updateRefreshRateForApp() {
 
 void updateRefreshRate() {
     static bool wasLastDocked = false;
-    if ((wasLastDocked && !isDocked && !displaySync) || (!wasLastDocked && isDocked && !displaySyncDocked)) {
-        uint32_t temp_refreshRate = 0;
-        if (GetDisplayRefreshRate(&temp_refreshRate, true) && temp_refreshRate != 60) {
-            SetDisplayRefreshRate(60);
+    uint32_t crr = 0;
+    // Refresh dock/link identity before transition policy; a missing link is not 60 Hz.
+    if (!GetDisplayRefreshRate(&crr, true)) return;
+    if (wasLastDocked && !isDocked && !displaySync) {
+        if (crr != 60 && SetDisplayRefreshRate(60)) {
             refreshRate = 0;
+            crr = 60;
         }
     }
     wasLastDocked = isDocked;
+    // Also handles first connection, HDMI reconnect, resolution change and resume.
+    UpdateDockedDisplayPreference(&crr);
 
     if (isDocked && !displaySyncDocked && nx_fps && nx_fps->FPSlockedDocked > 60) {
-        uint32_t temp_refreshRate = 0;
-        GetDisplayRefreshRate(&temp_refreshRate, true);
-        if (temp_refreshRate <= 60) {
+        if (crr <= 60) {
             nx_fps->FPSlockedDocked = 60;
         }
     }
-    
-    uint32_t crr = 0;
-    GetDisplayRefreshRate(&crr, true);
     if (isOLED) correctOledGamma(crr);
 
     if (nx_fps) nx_fps -> dontForce60InDocked = dontForce60InDocked;

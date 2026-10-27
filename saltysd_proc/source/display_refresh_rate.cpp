@@ -3,6 +3,7 @@
 #include "useful.h"
 #include <math.h>
 #include <array>
+#include "display_preferences.hpp"
 
 #define	NVDISP_GET_MODE2 0x803C021B
 #define	NVDISP_SET_MODE2 0x403C021C
@@ -19,9 +20,11 @@ bool isPossiblySpoofedRetro = false;
 bool wasRetroSuperTurnedOff = false;
 uint32_t last_vActive = 1080;
 
-constexpr uint8_t DockedModeRefreshRateAllowedValues[] = {40, 45, 50, 55, 60, 70, 72, 75, 80, 90, 95, 100, 110, 120};
+constexpr auto DockedModeRefreshRateAllowedValues = display_preferences::rates;
 bool DockedModeRefreshRateAllowed[sizeof(DockedModeRefreshRateAllowedValues)] = {0};
 bool DockedModeRefreshRateAllowed720p[sizeof(DockedModeRefreshRateAllowedValues)] = {0};
+static display_preferences::Settings monitorSettings;
+static display_preferences::Connection dockedConnection;
 
 struct dockedTimings {
     uint16_t hFrontPorch;
@@ -367,17 +370,11 @@ constexpr void setDefaultDockedSettings() {
     displaySyncDockedOutOfFocus60 = false;
 }
 
-void LoadDockedModeAllowedSave() {
-    SetSysEdid edid = {0};
+void LoadDockedModeAllowedSave(const SetSysEdid& edid) {
     setDefaultDockedSettings();
-    if (isLite)
-        return;
-    if (R_FAILED(setsysGetEdid(&edid))) {
-        SaltyNX_printf(APP_NAME ": Couldn't retrieve display EDID! Locking allowed refresh rates in docked mode to 50 and 60 Hz.\n");
-        return;
-    }
+    monitorSettings = {};
     char path[128] = "";
-    int crc32 = crc32Calculate(&edid, sizeof(edid));
+    uint32_t crc32 = crc32Calculate(&edid, sizeof(edid));
     npf_snprintf(path, sizeof(path), "sdmc:/SaltySD/plugins/FPSLocker/ExtDisplays/%08X.dat", crc32);
     if (file_or_directory_exists(path) == false) {
         FILE* file = fopen(path, "wb");
@@ -388,113 +385,84 @@ void LoadDockedModeAllowedSave() {
         else SaltyNX_printf(APP_NAME ": Couldn't dump EDID to sdcard!\n");
     }
     npf_snprintf(path, sizeof(path), "sdmc:/SaltySD/plugins/FPSLocker/ExtDisplays/%08X.ini", crc32);
-    if (file_or_directory_exists(path) == true) {
-        FILE* file = fopen(path, "r");
-        if (!file) {
-            SaltyNX_printf(APP_NAME ": %s opening failed (file already opened?). Locking allowed refresh rates in docked mode to 50 and 60 Hz.\n", &path[31]);
-            return;
-        }
-        fseek(file, 0, 2);
-        size_t size = ftell(file);
-        fseek(file, 0, 0);
-        char* temp_string = (char*)malloc(size);
-        if (!temp_string) {
-            SaltyNX_printf(APP_NAME ": Allocation failure! Memory leak. Get ready for crash.\n");
-        }
-        fread(temp_string, size, 1, file);
+    FILE* file = fopen(path, "rb");
+    if (!file) return; // Unknown displays retain the original 50/60-Hz defaults.
+    if (fseek(file, 0, SEEK_END)) { fclose(file); return; }
+    const long length = ftell(file);
+    if (length <= 0 || length > 16 * 1024 || fseek(file, 0, SEEK_SET)) {
         fclose(file);
-        remove_spaces(temp_string, temp_string);
-        if (memcmp(temp_string, "[Common]", 8)) {
-            SaltyNX_printf(APP_NAME ": %s doesn't start with \"[Common]\"! Using default settings!\n", &path[31]);
-            free(temp_string);
-            return;
-        }
-        char* substring = strstr(temp_string, "refreshRateAllowed={");
-        if (substring == NULL) {
-            SaltyNX_printf(APP_NAME ": %s doesn't have \"refreshRateAllowed\"! Using default settings!\n", &path[31]);
-            free(temp_string);
-            return;
-        }
-        char* rr_start = &substring[strlen("refreshRateAllowed={")];
-        substring = strstr(rr_start, "}");
-        if (substring == NULL) {
-            SaltyNX_printf(APP_NAME ": %s \"refreshRateAllowed\" is malformed! Using default settings!\n", &path[31]);
-            free(temp_string);
-            return;
-        }
-        size_t amount = 1;
-        for (size_t i = 0; i < ((size_t)substring - (size_t)rr_start); i++) {
-            if (rr_start[i] == ',') amount++;
-        }
-        for (size_t i = 0; i < amount; i++) {
-            long value = strtol(rr_start, &rr_start, 10);
-            if ((i+1 == amount) && (rr_start[0] != '}')) return;
-            if ((i+1 < amount) && (rr_start[0] != ',')) return;
-            rr_start = &rr_start[1];
-            if (value < 40 || value > 240) continue;
-            for (size_t i = 0; i < sizeof(DockedModeRefreshRateAllowed); i++) {
-                if (value == DockedModeRefreshRateAllowedValues[i]) {
-                    DockedModeRefreshRateAllowed[i] = true;
-                    break;
-                }
-            }
-        }
-        substring = strstr(temp_string, "allowPatchesToForce60InDocked=");
-        if (substring != NULL) {
-            substring = &substring[strlen("allowPatchesToForce60InDocked=")];
-            dontForce60InDocked = (bool)!strncasecmp(substring, "False", 5);
-        }
-        else SaltyNX_printf(APP_NAME ": %s doesn't have \"allowPatchesToForce60InDocked\"! Setting to true!\n", &path[31]);
-        substring = strstr(temp_string, "matchLowestRefreshRate=");
-        if (substring != NULL) {
-            substring = &substring[strlen("matchLowestRefreshRate=")];
-            matchLowestDocked = (bool)!strncasecmp(substring, "True", 4);
-        }
-        else SaltyNX_printf(APP_NAME ": %s doesn't have \"matchLowestRefreshRate\"! Setting to false!\n", &path[31]);
-        substring = strstr(temp_string, "bringDefaultRefreshRateWhenOutOfFocus=");
-        if (substring != NULL) {
-            substring = &substring[strlen("bringDefaultRefreshRateWhenOutOfFocus=")];
-            displaySyncDockedOutOfFocus60 = (bool)!strncasecmp(substring, "True", 4);
-        }
-        else SaltyNX_printf(APP_NAME ": %s doesn't have \"bringDefaultRefreshRateWhenOutOfFocus=\"! Setting to false!\n", &path[31]);
-        substring = strstr(temp_string, "refreshRateAllowed720p={");
-        if (substring == NULL) {
-            SaltyNX_printf(APP_NAME ": %s doesn't have \"refreshRateAllowed720p\"! Using default settings!\n", &path[31]);
-            free(temp_string);
-            return;
-        }
-        rr_start = &substring[strlen("refreshRateAllowed720p={")];
-        substring = strstr(rr_start, "}");
-        if (substring == NULL) {
-            SaltyNX_printf(APP_NAME ": %s \"refreshRateAllowed720p\" is malformed! Using default settings!\n", &path[31]);
-            free(temp_string);
-            return;
-        }
-        amount = 1;
-        for (size_t i = 0; i < ((size_t)substring - (size_t)rr_start); i++) {
-            if (rr_start[i] == ',') amount++;
-        }
-        for (size_t i = 0; i < amount; i++) {
-            long value = strtol(rr_start, &rr_start, 10);
-            if ((i+1 == amount) && (rr_start[0] != '}')) return;
-            if ((i+1 < amount) && (rr_start[0] != ',')) return;
-            rr_start = &rr_start[1];
-            if (value < 40 || value > 240) continue;
-            for (size_t i = 0; i < sizeof(DockedModeRefreshRateAllowed720p); i++) {
-                if (value == DockedModeRefreshRateAllowedValues[i]) {
-                    DockedModeRefreshRateAllowed720p[i] = true;
-                    break;
-                }
-            }
-        }
-        free(temp_string);
+        return;
     }
-    else {
-        SaltyNX_printf(APP_NAME ": File \"%s\" not found! Locking allowed refresh rates in docked mode to 50 and 60 Hz.\n", path);
-    }
+    char* text = static_cast<char*>(malloc(length));
+    if (!text) { fclose(file); return; }
+    const bool readOk = fread(text, 1, length, file) == static_cast<size_t>(length) && !ferror(file);
+    const bool closeOk = fclose(file) == 0;
+    if (readOk && closeOk) monitorSettings = display_preferences::parse({text, static_cast<size_t>(length)});
+    free(text);
+    memcpy(DockedModeRefreshRateAllowed, monitorSettings.allowed.data(), sizeof(DockedModeRefreshRateAllowed));
+    memcpy(DockedModeRefreshRateAllowed720p, monitorSettings.allowed720.data(), sizeof(DockedModeRefreshRateAllowed720p));
+    dontForce60InDocked = monitorSettings.dontForce60;
+    matchLowestDocked = monitorSettings.matchLowest;
+    displaySyncDockedOutOfFocus60 = monitorSettings.outOfFocus60;
 }
 
 bool canChangeRefreshRateDocked = false;
+
+static void invalidateDockedConnection() {
+    dockedConnection.disconnect();
+    canChangeRefreshRateDocked = false;
+    monitorSettings = {};
+    setDefaultDockedSettings();
+    dockedHighestRefreshRate = 60;
+    dockedLinkRate = 0;
+    dockedLaneCount = 0;
+}
+
+static void publishRefreshRate(uint32_t value) {
+    const auto address = reinterpret_cast<uintptr_t>(shmemGetAddr(&_sharedMemory));
+    if (address) *reinterpret_cast<uint8_t*>(address + 1) = static_cast<uint8_t>(value);
+    if (nx_fps) nx_fps->currentRefreshRate = static_cast<uint8_t>(value);
+}
+
+static bool pollDockedConnection(uint32_t fd, const nvdcMode2& mode) {
+    static uint64_t lastProbe = 0;
+    const uint64_t now = armTicksToNs(armGetSystemTick()) / 1'000'000;
+    // The existing refresh query is frequent. Limit EDID/link IPC to four times/s.
+    const auto& currentLink = dockedConnection.current();
+    const bool changedDimensions = canChangeRefreshRateDocked &&
+        (currentLink.width != mode.hActive || currentLink.height != mode.vActive);
+    if (lastProbe && now >= lastProbe && now - lastProbe < 250 &&
+        !changedDimensions) return canChangeRefreshRateDocked;
+    lastProbe = now;
+    dpaux_read_0x100 dpaux = {6, 0x100, 0x10};
+    SetSysEdid edid = {};
+    constexpr uint8_t pattern[] = {0, 255, 255, 255, 255, 255, 255, 0};
+    if (R_FAILED(nvIoctl(fd, NVDISP_GET_PANEL_DATA, &dpaux)) ||
+        !dpaux.set.link_rate || !dpaux.set.lane_count ||
+        R_FAILED(setsysGetEdid(&edid)) || memcmp(edid.pattern, pattern, sizeof(pattern))) {
+        invalidateDockedConnection();
+        return false;
+    }
+    const display_preferences::Link link{crc32Calculate(&edid, sizeof(edid)), mode.hActive,
+        mode.vActive, dpaux.set.link_rate, dpaux.set.lane_count};
+    const auto observation = dockedConnection.observe(link, now);
+    canChangeRefreshRateDocked = dockedConnection.ready();
+    if (!canChangeRefreshRateDocked) {
+        monitorSettings = {};
+        setDefaultDockedSettings();
+        dockedHighestRefreshRate = 60;
+        dockedLinkRate = 0;
+        dockedLaneCount = 0;
+    }
+    if (observation == display_preferences::Connection::Observation::Activated) {
+        last_vActive = mode.vActive;
+        LoadDockedModeAllowedSave(edid);
+        getDockedHighestRefreshRate(fd);
+        SaltyNX_printf(APP_NAME ": Display %08X ready at %ux%u, link %u x %u.\n",
+            link.edid, link.width, link.height, link.rate, link.lanes);
+    }
+    return canChangeRefreshRateDocked;
+}
 
 struct dpaux_read {
     u32 cmd;
@@ -582,8 +550,8 @@ bool setPLLDHandheldRefreshRate(uint32_t new_refreshRate) {
 }
 
 bool setNvDispDockedRefreshRate(uint32_t new_refreshRate) {
-    static uint8_t last_vActive_set = 0;
-    if (isLite || !canChangeRefreshRateDocked)
+    static uint32_t last_vActive_set = 0;
+    if (isLite || !canChangeRefreshRateDocked || !new_refreshRate)
         return false;
     uint32_t fd = 0;
     if (R_FAILED(nvOpen(&fd, "/dev/nvdisp-disp1"))) {
@@ -656,8 +624,13 @@ bool setNvDispDockedRefreshRate(uint32_t new_refreshRate) {
         }
         else itr++;
     }
+    if (itr < 0 || itr >= static_cast<int8_t>(DockedModeRefreshRateAllowedValues.size()) ||
+        DockedModeRefreshRateAllowedValues[itr] > dockedHighestRefreshRate) {
+        nvClose(fd);
+        return false;
+    }
     if (refreshRateNow == DockedModeRefreshRateAllowedValues[itr]) {
-        if (nx_fps) nx_fps->currentRefreshRate = DockedModeRefreshRateAllowedValues[itr];
+        publishRefreshRate(DockedModeRefreshRateAllowedValues[itr]);
         nvClose(fd);
         return true;
     }
@@ -684,12 +657,35 @@ bool setNvDispDockedRefreshRate(uint32_t new_refreshRate) {
         if (R_SUCCEEDED(nvrc)) {
             nvrc = nvIoctl(fd, NVDISP_SET_MODE2, &DISPLAY_B);
             if (R_FAILED(nvrc)) SaltyNX_printf(APP_NAME ": NVDISP_SET_MODE2 failed! rc: 0x%x\n", nvrc);
-            else if (nx_fps) nx_fps->currentRefreshRate = DockedModeRefreshRateAllowedValues[itr];
-        }
-        else SaltyNX_printf(APP_NAME ": NVDISP_VALIDATE_MODE2 failed! rc: 0x%x, pclkKHz: %d, Hz: %d\n", nvrc, clock, DockedModeRefreshRateAllowedValues[itr]);
+            else publishRefreshRate(DockedModeRefreshRateAllowedValues[itr]);
+        } else SaltyNX_printf(APP_NAME ": NVDISP_VALIDATE_MODE2 failed! rc: 0x%x, pclkKHz: %d, Hz: %d\n", nvrc, DISPLAY_B.pclkKHz, DockedModeRefreshRateAllowedValues[itr]);
     }
     nvClose(fd);
-    return true;
+    return R_SUCCEEDED(nvrc);
+}
+
+extern "C" void MarkDockedRefreshManuallySelected() {
+    if (isDocked && !displaySyncDocked) dockedConnection.manualSelection();
+}
+
+extern "C" void UpdateDockedDisplayPreference(uint32_t* current) {
+    const uint64_t now = armTicksToNs(armGetSystemTick()) / 1'000'000;
+    if (!isDocked || !canChangeRefreshRateDocked || !dockedConnection.shouldApply(displaySyncDocked, now)) return;
+    // Reflect allowlist edits received over IPC since loading the monitor's INI.
+    auto settings = monitorSettings;
+    memcpy(settings.allowed.data(), DockedModeRefreshRateAllowed, sizeof(DockedModeRefreshRateAllowed));
+    memcpy(settings.allowed720.data(), DockedModeRefreshRateAllowed720p, sizeof(DockedModeRefreshRateAllowed720p));
+    const uint8_t preferred = display_preferences::preferredTarget(settings, dockedConnection.current(), dockedHighestRefreshRate);
+    const uint8_t target = preferred ? preferred : 60;
+    const bool success = *current == target || setNvDispDockedRefreshRate(target);
+    dockedConnection.attempted(success, now);
+    if (success) {
+        *current = target;
+        // Manual display preference is independent of the game's FPS target.
+        refreshRate = 0;
+    }
+    SaltyNX_printf(APP_NAME ": Display %08X preference %u Hz (target %u), %s.\n",
+        dockedConnection.current().edid, preferred, target, success ? "applied" : "rejected");
 }
 
 bool setNvDispHandheldRefreshRate(uint32_t new_refreshRate) {
@@ -807,7 +803,7 @@ extern "C" bool SetDisplayRefreshRate(uint32_t new_refreshRate) {
             if (!isRetroSUPER) return_immediately = !setPLLDHandheldRefreshRate(new_refreshRate);
             else return_immediately = !setNvDispHandheldRefreshRate(new_refreshRate); //Used only for Retro Remake displays because they are very picky about pixel clock
         }
-        else return_immediately = !setNvDispDockedRefreshRate(new_refreshRate);
+        else return setNvDispDockedRefreshRate(new_refreshRate); // Publishes the actual selected mode, not the request.
         if (return_immediately) return false;
     }
     if (nx_fps) nx_fps->currentRefreshRate = new_refreshRate;
@@ -828,6 +824,7 @@ extern "C" bool GetDisplayRefreshRate(uint32_t* out_refreshRate, bool internal) 
         }
         else return false;
     }
+    *out_refreshRate = 0;
     if (isRetroSUPER && !isDocked) {
         u32 fd = 0;
         struct PLLD_BASE temp = {0};
@@ -860,51 +857,33 @@ extern "C" bool GetDisplayRefreshRate(uint32_t* out_refreshRate, bool internal) 
             if (isLite)
                 return false;
             isDocked = true;
-            //We must add delay for changing refresh rate when it was just put into dock to avoid doing calculation on default values instead of adjusted ones
-            //From my tests 1 second is enough
-            if (!canChangeRefreshRateDocked) {
-                u32 fd = 0;
-                if (R_SUCCEEDED(nvOpen(&fd, "/dev/nvdisp-disp1"))) {
-                    struct dpaux_read_0x100 dpaux = {6, 0x100, 0x10};
-                    Result nvrc = nvIoctl(fd, NVDISP_GET_PANEL_DATA, &dpaux);
-                    nvClose(fd);
-                    if (R_SUCCEEDED(nvrc)) {
-                        LoadDockedModeAllowedSave();
-                        getDockedHighestRefreshRate(0);
-                        canChangeRefreshRateDocked = true;
-                    }
-                    else {
-                        svcSleepThread(1'000'000'000);
-                        return false;
-                    }
-                }
-                else return false;
-            }
             uint32_t fd = 0;
-            if (R_SUCCEEDED(nvOpen(&fd, "/dev/nvdisp-disp1"))) {
-                struct nvdcMode2 DISPLAY_B = {0};
-                if (R_SUCCEEDED(nvIoctl(fd, NVDISP_GET_MODE2, &DISPLAY_B))) {
-                    if (!DISPLAY_B.pclkKHz) {
-                        nvClose(fd);
-                        return false;
-                    }
-                    if (last_vActive != DISPLAY_B.vActive) {
-                        last_vActive = DISPLAY_B.vActive;
-                        getDockedHighestRefreshRate(fd);
-                    }
-                    uint32_t h_total = DISPLAY_B.hActive + DISPLAY_B.hFrontPorch + DISPLAY_B.hSyncWidth + DISPLAY_B.hBackPorch;
-                    uint32_t v_total = DISPLAY_B.vActive + DISPLAY_B.vFrontPorch + DISPLAY_B.vSyncWidth + DISPLAY_B.vBackPorch;
-                    uint32_t pixelClock = DISPLAY_B.pclkKHz * 1000 + 999;
-                    value = pixelClock / (h_total * v_total);
-                }
-                else value = 60;
-                nvClose(fd);
+            if (R_FAILED(nvOpen(&fd, "/dev/nvdisp-disp1"))) {
+                invalidateDockedConnection();
+                publishRefreshRate(0);
+                return false;
             }
-            else value = 60;
+            nvdcMode2 mode = {};
+            if (R_FAILED(nvIoctl(fd, NVDISP_GET_MODE2, &mode)) || !mode.pclkKHz || !mode.hActive || !mode.vActive) {
+                nvClose(fd);
+                invalidateDockedConnection();
+                publishRefreshRate(0);
+                return false;
+            }
+            const bool ready = pollDockedConnection(fd, mode);
+            nvClose(fd);
+            if (!ready) {
+                publishRefreshRate(0);
+                return false;
+            }
+            const uint32_t h_total = mode.hActive + mode.hFrontPorch + mode.hSyncWidth + mode.hBackPorch;
+            const uint32_t v_total = mode.vActive + mode.vFrontPorch + mode.vSyncWidth + mode.vBackPorch;
+            const uint32_t pixelClock = mode.pclkKHz * 1000 + 999;
+            value = pixelClock / (h_total * v_total);
         }
         else if (!isRetroSUPER) {
             isDocked = false;
-            canChangeRefreshRateDocked = false;
+            invalidateDockedConnection();
             //We are in handheld mode
             /*
                 Official formula:
